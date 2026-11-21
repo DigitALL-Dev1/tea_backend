@@ -5,6 +5,11 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from api.get_tender import router as tender_router
+from api.auth import router as auth_router
+from api.bid_request import router as bid_request_router
+from api.approved_tenders import router as approved_tenders_router
+from api.ai_tenders import router as ai_tenders_router
+from api.dashboard import router as dashboard_router
 
 
 # Load environment variables
@@ -29,6 +34,11 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
+app.include_router(bid_request_router, prefix="/api/v1/bid-requests", tags=["Bid Requests"])
+app.include_router(approved_tenders_router, prefix="/api/v1/approved-tenders", tags=["Approved Tenders"])
+app.include_router(ai_tenders_router, prefix="/api/v1/ai-tenders", tags=["AI Tenders"])
+app.include_router(dashboard_router, prefix="/api/v1/dashboard", tags=["Dashboard"])
 app.include_router(tender_router, prefix="/api/v1/tenders", tags=["Tenders"])
 
 

@@ -2,7 +2,7 @@
 import sqlite3
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, status
 from pydantic import BaseModel
 from api.auth import get_current_user, get_db_connection as get_auth_db_connection
 import os
@@ -219,10 +219,12 @@ class BidRequestResponse(BaseModel):
 @router.post("/create", response_model=BidRequestResponse)
 async def create_bid_request_endpoint(
     request: BidRequestCreate,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
     """
     Create a bid request (Kowsalya sends tender to Bernard).
+    Also starts the AI summary of the tender in the background (shown to Bernard).
     Authenticated user sends a tender notice to another user asking if they should bid.
     """
     # Get the recipient user
@@ -248,8 +250,29 @@ async def create_bid_request_endpoint(
         notes=request.notes,
         tender_title=(request.tender_title or "").strip()[:500] or None,
     )
-    
+
+    # AI summary: fetch the UNGM notice and summarise it with Claude after responding
+    mark_pending(bid_request["id"])
+    background_tasks.add_task(generate_summary, bid_request["id"], request.tender_notice_id)
+
     return bid_request
+
+
+@router.post("/{bid_request_id}/summary")
+async def regenerate_summary_endpoint(
+    bid_request_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user)
+):
+    """Re-run the AI summary for a bid request (sender or recipient only)."""
+    bid_request = get_bid_request_by_id(bid_request_id)
+    if not bid_request:
+        raise HTTPException(status_code=404, detail="Bid request not found")
+    if current_user["id"] not in (bid_request["from_user_id"], bid_request["to_user_id"]):
+        raise HTTPException(status_code=403, detail="You don't have permission to view this bid request")
+    mark_pending(bid_request_id)
+    background_tasks.add_task(generate_summary, bid_request_id, bid_request["tender_notice_id"])
+    return {"id": bid_request_id, "summary_status": "pending"}
 
 
 @router.patch("/{bid_request_id}/status", response_model=BidRequestResponse)
@@ -442,6 +465,8 @@ async def get_pending_bid_requests(
                     "notes": bid_request["notes"],
                     "requested_at": bid_request["requested_at"],
                     "updated_at": bid_request["updated_at"],
+                    "tender_title": bid_request.get("tender_title"),
+                    **summary_fields(bid_request),
                 },
                 "tender": tender_data,
                 "tender_error": tender_error
@@ -523,3 +548,6 @@ async def get_bid_requests_by_tender(
 
 # Initialize table when module is imported
 init_bid_request_table()
+
+# After the table exists: adds the ai_summary columns
+from api.tender_summary import generate_summary, mark_pending, summary_fields  # noqa: E402

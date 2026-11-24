@@ -12,6 +12,8 @@ from bs4 import BeautifulSoup
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from api.search_settings import load_search_settings
+
 BASE = "https://www.ungm.org"
 PAGE_URL = f"{BASE}/Public/Notice"
 SEARCH_URL = f"{BASE}/Public/Notice/Search"
@@ -219,6 +221,35 @@ def _fetch(f: dict, limit: int, fetch_all: bool) -> list[dict]:
         return results
 
 
+def clear_cache() -> None:
+    """Drop cached searches (called when the search settings change)."""
+    with _lock:
+        _cache.clear()
+
+
+def _date_key(value: str) -> datetime:
+    for fmt in ("%d-%b-%Y %H:%M", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(value[:17].strip(), fmt)
+        except ValueError:
+            continue
+    return datetime.max
+
+
+def _fetch_keywords(f: dict, keywords: list[str], limit: int, fetch_all: bool) -> list[dict]:
+    """Tenders whose title matches ANY keyword: one UNGM search per keyword, merged."""
+    merged: dict[str, dict] = {}
+    for kw in keywords:
+        for row in _fetch({**f, "title": kw}, limit, fetch_all):
+            merged.setdefault(row["notice_id"], row)
+    rows = list(merged.values())
+    if f["sort"] == "deadline":
+        rows.sort(key=lambda r: _date_key(r["deadline"]))
+    else:
+        rows.sort(key=lambda r: _date_key(r["published"]), reverse=True)
+    return rows if fetch_all else rows[:limit]
+
+
 # ---------- API ----------
 
 DATE_HELP = "Date in UNGM format, e.g. 15-Nov-2026"
@@ -250,6 +281,11 @@ async def get_tenders(
         "deadline", description="deadline = soonest deadline first (website default); published = newest first"),
     limit: int = Query(10, ge=1, le=500, description="Max tenders to return"),
     fetch_all: bool = Query(False, description="Fetch every matching page (best with a date range)"),
+    apply_settings: bool = Query(
+        True,
+        description="Use the saved search settings (Keywords, Countries, Agencies) for any of "
+                    "title / country / organization not given in this request",
+    ),
 ):
     """Get UNGM tenders matching the given filters."""
     filters = {
@@ -266,8 +302,27 @@ async def get_tenders(
         "active": not include_closed,
         "sort": sort,
     }
+    # Saved settings fill in whatever this request didn't specify
+    keywords: list[str] = []
+    if apply_settings:
+        saved = load_search_settings()
+        if not filters["title"]:
+            keywords = saved["keywords"]
+        if not filters["country"]:
+            filters["country"] = saved["countries"]
+        if not filters["organization"]:
+            filters["organization"] = saved["agencies"]
+    filters["keywords"] = keywords
+    filters["settings_applied"] = apply_settings
+
     try:
-        tenders = await asyncio.to_thread(_fetch, filters, limit, fetch_all)
+        search = {k: v for k, v in filters.items() if k not in ("keywords", "settings_applied")}
+        if len(keywords) > 1:
+            tenders = await asyncio.to_thread(_fetch_keywords, search, keywords, limit, fetch_all)
+        else:
+            if keywords:
+                search["title"] = keywords[0]
+            tenders = await asyncio.to_thread(_fetch, search, limit, fetch_all)
     except UngmRateLimited:
         raise HTTPException(429, "UNGM is limiting requests right now. Please wait a minute and try again.")
     except (requests.RequestException, RuntimeError) as e:

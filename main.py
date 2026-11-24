@@ -10,6 +10,8 @@ from api.bid_request import router as bid_request_router
 from api.approved_tenders import router as approved_tenders_router
 from api.ai_tenders import router as ai_tenders_router
 from api.dashboard import router as dashboard_router
+from api.search_settings import router as search_settings_router
+from api.ai_score import router as ai_score_router
 
 
 # Load environment variables
@@ -39,7 +41,9 @@ app.include_router(bid_request_router, prefix="/api/v1/bid-requests", tags=["Bid
 app.include_router(approved_tenders_router, prefix="/api/v1/approved-tenders", tags=["Approved Tenders"])
 app.include_router(ai_tenders_router, prefix="/api/v1/ai-tenders", tags=["AI Tenders"])
 app.include_router(dashboard_router, prefix="/api/v1/dashboard", tags=["Dashboard"])
+app.include_router(search_settings_router, prefix="/api/v1/settings", tags=["Settings"])
 app.include_router(tender_router, prefix="/api/v1/tenders", tags=["Tenders"])
+app.include_router(ai_score_router, prefix="/api/v1/ai-score", tags=["AI Score"])
 
 
 @app.get("/")
